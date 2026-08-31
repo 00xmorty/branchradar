@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""BranchRadar: read-only local Git branch inventory."""
+import argparse
+import datetime as dt
+import json
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+
+
+def git(*args):
+    return subprocess.run(["git", *args], text=True, capture_output=True)
+
+
+def require_repo():
+    result = git("rev-parse", "--is-inside-work-tree")
+    if result.returncode or result.stdout.strip() != "true":
+        raise SystemExit("error: run BranchRadar inside a Git work tree")
+
+
+def current_branch():
+    return git("branch", "--show-current").stdout.strip()
+
+
+def merged_branches():
+    result = git("branch", "--merged", "HEAD", "--format=%(refname:short)")
+    return set(result.stdout.splitlines()) if result.returncode == 0 else set()
+
+
+def counts(branch, upstream):
+    if not upstream:
+        return None, None
+    result = git("rev-list", "--left-right", "--count", f"{branch}...{upstream}")
+    if result.returncode:
+        return None, None
+    try:
+        ahead, behind = map(int, result.stdout.split())
+        return ahead, behind
+    except ValueError:
+        return None, None
+
+
+def collect(now):
+    fmt = "%00".join(["%(refname:short)", "%(committerdate:unix)", "%(upstream:short)", "%(subject)"])
+    result = git("for-each-ref", "--sort=-committerdate", f"--format={fmt}", "refs/heads/")
+    if result.returncode:
+        raise SystemExit(f"error: git branch scan failed: {result.stderr.strip()}")
+    merged = merged_branches()
+    current = current_branch()
+    rows = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\x00")
+        if len(parts) != 4:
+            continue
+        name, stamp, upstream, subject = parts
+        committed = dt.datetime.fromtimestamp(int(stamp), tz=dt.timezone.utc)
+        age = max(0, (now - committed).days)
+        ahead, behind = counts(name, upstream)
+        rows.append({
+            "branch": name, "current": name == current, "age_days": age,
+            "last_commit": committed.date().isoformat(), "merged_into_head": name in merged,
+            "upstream": upstream or None, "ahead": ahead, "behind": behind,
+            "subject": subject,
+        })
+    return rows
+
+
+def render(rows):
+    print("CUR  AGE  MERGED  A/B    BRANCH (UPSTREAM)")
+    for row in rows:
+        ab = "-" if row["ahead"] is None else f'{row["ahead"]}/{row["behind"]}'
+        target = row["branch"] + (f' ({row["upstream"]})' if row["upstream"] else "")
+        print(f'{"*" if row["current"] else " ":<3}  {row["age_days"]:>3}d  '
+              f'{"yes" if row["merged_into_head"] else "no":<6}  {ab:<5}  {target}')
+    print(f"\n{len(rows)} local branch(es). Read-only: nothing changed.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Inventory local Git branches by age and status (read-only).")
+    parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument("--stale-days", type=int, default=0, metavar="N", help="show branches at least N days old")
+    parser.add_argument("--version", action="version", version=f"BranchRadar {VERSION}")
+    args = parser.parse_args()
+    if args.stale_days < 0:
+        parser.error("--stale-days must be non-negative")
+    require_repo()
+    rows = [r for r in collect(dt.datetime.now(dt.timezone.utc)) if r["age_days"] >= args.stale_days]
+    if args.json:
+        json.dump({"read_only": True, "branches": rows}, sys.stdout, indent=2)
+        print()
+    else:
+        render(rows)
+
+
+if __name__ == "__main__":
+    main()
