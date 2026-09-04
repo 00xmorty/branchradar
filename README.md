@@ -1,6 +1,6 @@
 # BranchRadar
 
-BranchRadar is a tiny, dependency-free, read-only CLI that sorts local Git branches by their last commit and shows age, merge status, and upstream ahead/behind counts.
+BranchRadar is a tiny, dependency-free, read-only CLI that sorts local Git branches by their last commit and shows age, merge status against a chosen base, and upstream ahead/behind counts.
 
 ## Run
 
@@ -16,14 +16,21 @@ cd /path/to/your/repo
 Or clone and run `./branchradar` inside any Git work tree.
 
 ```text
-CUR  AGE  MERGED  A/B    BRANCH (UPSTREAM)
+CUR  AGE  MERGED->HEAD  A/B    BRANCH (UPSTREAM)
 *      0d  yes     1/0    feature (origin/feature)
       42d  yes     -      old-experiment
 
 2 local branch(es). Read-only: nothing changed.
 ```
 
-Use `--stale-days 30` to filter by age or `--json` for automation.
+Use `--stale-days 30` to filter by age or `--json` for automation. Version 0.2.0 can compare merge ancestry against an explicit local base ref without checking it out:
+
+```sh
+./branchradar --base main
+./branchradar --base origin/main --json
+```
+
+The ref must already exist locally. BranchRadar never fetches it.
 
 ## Safety
 
@@ -34,7 +41,7 @@ Use `--stale-days 30` to filter by age or `--json` for automation.
 
 ## Limitations
 
-- `merged` means reachable from the current `HEAD`; it is not proof that a branch is safe to delete.
+- `merged` means reachable from `HEAD` or the ref supplied with `--base`; it is not proof that a branch is safe to delete.
 - Ahead/behind is calculated only for an existing local upstream-tracking reference. BranchRadar does not fetch, so remote state may be stale.
 - Squash/rebase merges may appear unmerged because commit ancestry changed.
 - Commit age is not the same as branch creation age; Git does not reliably store branch creation time.
